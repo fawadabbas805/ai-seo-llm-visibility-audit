@@ -1,7 +1,7 @@
 import csv
 import json
 import re
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -16,10 +16,33 @@ AI_CRAWLERS = [
     "Google-Extended",
 ]
 
+QUESTION_WORDS = (
+    "what", "why", "how", "when", "where", "who",
+    "which", "can", "could", "does", "do", "is",
+    "are", "should", "will"
+)
+
+
+def get_page(url):
+    """Request a webpage using a standard browser-style user agent."""
+    return requests.get(
+        url,
+        timeout=20,
+        allow_redirects=True,
+        headers={
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0 Safari/537.36"
+            )
+        },
+    )
+
 
 def get_robots_txt(url):
-    """Retrieve robots.txt for the website."""
-    robots_url = urljoin(url, "/robots.txt")
+    """Retrieve robots.txt from the site's root."""
+    parsed = urlparse(url)
+    robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
 
     try:
         response = requests.get(
@@ -37,95 +60,281 @@ def get_robots_txt(url):
         return robots_url, ""
 
 
-def check_ai_crawlers(robots_text):
-    """Check whether common AI crawlers are mentioned or blocked."""
+def parse_robots_groups(robots_text):
+    """Parse basic robots.txt user-agent groups."""
+    groups = []
+    current_agents = []
+    current_rules = []
 
-    results = {}
+    for raw_line in robots_text.splitlines():
+        line = raw_line.split("#", 1)[0].strip()
 
-    lower_text = robots_text.lower()
-
-    for crawler in AI_CRAWLERS:
-        crawler_lower = crawler.lower()
-
-        if crawler_lower not in lower_text:
-            results[crawler] = "Not specifically mentioned"
+        if not line or ":" not in line:
             continue
 
-        pattern = (
-            r"user-agent:\s*"
-            + re.escape(crawler_lower)
-            + r"(.*?)(?=user-agent:|\Z)"
-        )
+        directive, value = line.split(":", 1)
+        directive = directive.strip().lower()
+        value = value.strip()
 
-        match = re.search(
-            pattern,
-            lower_text,
-            flags=re.DOTALL,
-        )
+        if directive == "user-agent":
+            if current_rules:
+                groups.append((current_agents, current_rules))
+                current_agents = []
+                current_rules = []
 
-        if match:
-            rules = match.group(1)
+            current_agents.append(value.lower())
 
-            if re.search(r"disallow:\s*/\s*(?:\n|$)", rules):
-                results[crawler] = "Blocked"
-            else:
-                results[crawler] = "Mentioned / not fully blocked"
-        else:
-            results[crawler] = "Mentioned"
+        elif directive in ("allow", "disallow"):
+            if current_agents:
+                current_rules.append(
+                    (directive, value)
+                )
 
-    return results
+    if current_agents:
+        groups.append((current_agents, current_rules))
+
+    return groups
+
+
+def crawler_status(robots_text, crawler):
+    """
+    Return a simple robots.txt accessibility assessment.
+
+    This checks explicit crawler groups and wildcard rules.
+    It does not claim whether an AI platform will index, cite,
+    train on, or surface the website.
+    """
+    if not robots_text:
+        return "Could not verify"
+
+    groups = parse_robots_groups(robots_text)
+    crawler_lower = crawler.lower()
+
+    relevant_groups = [
+        rules
+        for agents, rules in groups
+        if crawler_lower in agents
+    ]
+
+    if not relevant_groups:
+        relevant_groups = [
+            rules
+            for agents, rules in groups
+            if "*" in agents
+        ]
+
+        if not relevant_groups:
+            return "No specific directive"
+
+        source = "Wildcard"
+    else:
+        source = "Explicit"
+
+    rules = [
+        rule
+        for group in relevant_groups
+        for rule in group
+    ]
+
+    root_disallow = any(
+        directive == "disallow" and path.strip() == "/"
+        for directive, path in rules
+    )
+
+    root_allow = any(
+        directive == "allow" and path.strip() == "/"
+        for directive, path in rules
+    )
+
+    if root_disallow and not root_allow:
+        return f"Blocked ({source})"
+
+    if rules:
+        return f"Accessible / partial rules ({source})"
+
+    return f"No blocking rule ({source})"
 
 
 def extract_schema_types(soup):
-    """Extract schema.org @type values from JSON-LD."""
+    """Extract unique @type values from JSON-LD."""
+    schema_types = set()
 
-    schema_types = []
+    def walk(data):
+        if isinstance(data, dict):
+            schema_type = data.get("@type")
+
+            if isinstance(schema_type, list):
+                for item in schema_type:
+                    schema_types.add(str(item))
+
+            elif schema_type:
+                schema_types.add(str(schema_type))
+
+            for value in data.values():
+                walk(value)
+
+        elif isinstance(data, list):
+            for item in data:
+                walk(item)
 
     scripts = soup.find_all(
         "script",
         attrs={"type": "application/ld+json"},
     )
 
-    def find_types(data):
-        if isinstance(data, dict):
-
-            if "@type" in data:
-                value = data["@type"]
-
-                if isinstance(value, list):
-                    schema_types.extend(
-                        [str(item) for item in value]
-                    )
-                else:
-                    schema_types.append(str(value))
-
-            for value in data.values():
-                find_types(value)
-
-        elif isinstance(data, list):
-
-            for item in data:
-                find_types(item)
-
     for script in scripts:
+        raw = script.string or script.get_text()
+
+        if not raw.strip():
+            continue
 
         try:
-            data = json.loads(script.string or script.get_text())
-            find_types(data)
+            data = json.loads(raw)
+            walk(data)
 
         except (json.JSONDecodeError, TypeError):
             continue
 
-    return sorted(set(schema_types))
+    return sorted(schema_types)
+
+
+def find_author_signal(soup, schema_types):
+    """Look for basic visible or structured author signals."""
+    if "Person" in schema_types:
+        return "Yes"
+
+    if soup.find(
+        attrs={
+            "rel": lambda value: (
+                value
+                and (
+                    "author" in value
+                    if isinstance(value, list)
+                    else "author" in str(value).lower()
+                )
+            )
+        }
+    ):
+        return "Yes"
+
+    author_selectors = [
+        '[class*="author"]',
+        '[id*="author"]',
+        '[itemprop="author"]',
+    ]
+
+    for selector in author_selectors:
+        if soup.select_one(selector):
+            return "Yes"
+
+    return "Not detected"
+
+
+def count_question_headings(soup):
+    """Count headings written in a question-oriented format."""
+    count = 0
+
+    for heading in soup.find_all(
+        ["h2", "h3", "h4"]
+    ):
+        text = heading.get_text(
+            " ",
+            strip=True,
+        ).lower()
+
+        if not text:
+            continue
+
+        if text.endswith("?") or text.startswith(
+            QUESTION_WORDS
+        ):
+            count += 1
+
+    return count
+
+
+def detect_entity_signals(soup, schema_types):
+    """Detect basic organization/person/entity signals."""
+    score = 0
+    signals = []
+
+    entity_schema = {
+        "Organization",
+        "Corporation",
+        "LocalBusiness",
+        "Person",
+        "Brand",
+    }
+
+    detected = entity_schema.intersection(
+        set(schema_types)
+    )
+
+    if detected:
+        score += 2
+        signals.append(
+            "Entity schema: "
+            + ", ".join(sorted(detected))
+        )
+
+    same_as_found = False
+
+    for script in soup.find_all(
+        "script",
+        attrs={"type": "application/ld+json"},
+    ):
+        raw = script.string or script.get_text()
+
+        if '"sameAs"' in raw or "'sameAs'" in raw:
+            same_as_found = True
+            break
+
+    if same_as_found:
+        score += 1
+        signals.append("sameAs references")
+
+    og_site = soup.find(
+        "meta",
+        attrs={"property": "og:site_name"},
+    )
+
+    if og_site and og_site.get("content"):
+        score += 1
+        signals.append("Site/brand name metadata")
+
+    if not signals:
+        return 0, "Limited signals detected"
+
+    return score, "; ".join(signals)
+
+
+def classify_score(score, maximum):
+    """Convert a component score into a readable assessment."""
+    if maximum == 0:
+        return "Not assessed"
+
+    percentage = (score / maximum) * 100
+
+    if percentage >= 80:
+        return "Strong"
+
+    if percentage >= 60:
+        return "Good"
+
+    if percentage >= 40:
+        return "Moderate"
+
+    return "Limited"
 
 
 def audit_url(url):
-    """Run AI SEO, AEO and GEO readiness checks."""
+    """Run Technical SEO + AEO/GEO/AI crawler readiness checks."""
 
     result = {
         "URL": url,
         "Status Code": "",
         "Final URL": "",
+        "Indexability": "",
         "Title": "",
         "Meta Description": "",
         "Canonical": "",
@@ -133,10 +342,12 @@ def audit_url(url):
         "H2 Count": 0,
         "Question Headings": 0,
         "Schema Types": "",
+        "Article Schema": "No",
         "FAQ Schema": "No",
         "Organization Schema": "No",
         "Person Schema": "No",
-        "Author Signal": "No",
+        "Author Signal": "",
+        "Entity Signals": "",
         "Robots.txt": "",
         "GPTBot": "",
         "ChatGPT-User": "",
@@ -144,53 +355,63 @@ def audit_url(url):
         "ClaudeBot": "",
         "PerplexityBot": "",
         "Google-Extended": "",
-        "AI SEO Score": 0,
+        "Technical Readiness": "",
+        "AEO Signals": "",
+        "Entity Readiness": "",
+        "AI Crawler Access": "",
+        "Custom Readiness Score": 0,
     }
 
     try:
-        response = requests.get(
-            url,
-            timeout=20,
-            allow_redirects=True,
-            headers={
-                "User-Agent": (
-                    "Mozilla/5.0 (compatible; "
-                    "AISEOAuditBot/1.0)"
-                )
-            },
-        )
+        response = get_page(url)
 
         result["Status Code"] = response.status_code
         result["Final URL"] = response.url
 
-        soup = BeautifulSoup(response.text, "html.parser")
+        soup = BeautifulSoup(
+            response.text,
+            "html.parser",
+        )
 
-        # Title
+        # -------------------------
+        # Basic Technical SEO
+        # -------------------------
+
         if soup.title:
             result["Title"] = soup.title.get_text(
-                strip=True
+                " ",
+                strip=True,
             )
 
-        # Meta description
         meta_description = soup.find(
             "meta",
-            attrs={"name": re.compile(
-                "^description$",
-                re.I,
-            )},
+            attrs={
+                "name": re.compile(
+                    r"^description$",
+                    re.I,
+                )
+            },
         )
 
         if meta_description:
             result["Meta Description"] = (
-                meta_description.get("content", "")
+                meta_description.get(
+                    "content",
+                    "",
+                ).strip()
             )
 
-        # Canonical
         canonical = soup.find(
             "link",
-            attrs={"rel": lambda value: (
-                value and "canonical" in value
-            )},
+            rel=lambda value: (
+                value
+                and (
+                    "canonical" in value
+                    if isinstance(value, list)
+                    else "canonical"
+                    in str(value).lower()
+                )
+            ),
         )
 
         if canonical:
@@ -199,7 +420,6 @@ def audit_url(url):
                 "",
             )
 
-        # Headings
         h1 = soup.find("h1")
 
         if h1:
@@ -208,140 +428,291 @@ def audit_url(url):
                 strip=True,
             )
 
-        h2_tags = soup.find_all("h2")
-        result["H2 Count"] = len(h2_tags)
-
-        question_words = (
-            "what",
-            "why",
-            "how",
-            "when",
-            "where",
-            "who",
-            "which",
-            "can",
-            "does",
-            "is",
-            "are",
-            "should",
+        result["H2 Count"] = len(
+            soup.find_all("h2")
         )
 
-        question_count = 0
+        result["Question Headings"] = (
+            count_question_headings(soup)
+        )
 
-        for heading in soup.find_all(
-            ["h2", "h3", "h4"]
-        ):
-            text = heading.get_text(
-                " ",
-                strip=True,
+        robots_meta = soup.find(
+            "meta",
+            attrs={
+                "name": re.compile(
+                    r"^robots$",
+                    re.I,
+                )
+            },
+        )
+
+        robots_content = ""
+
+        if robots_meta:
+            robots_content = robots_meta.get(
+                "content",
+                "",
             ).lower()
 
-            if (
-                text.endswith("?")
-                or text.startswith(question_words)
-            ):
-                question_count += 1
+        if response.status_code != 200:
+            result["Indexability"] = (
+                "Non-200 response"
+            )
 
-        result["Question Headings"] = question_count
+        elif "noindex" in robots_content:
+            result["Indexability"] = "Noindex"
 
-        # Structured data
+        else:
+            result["Indexability"] = (
+                "No meta noindex detected"
+            )
+
+        # -------------------------
+        # Structured Data
+        # -------------------------
+
         schema_types = extract_schema_types(soup)
 
-        result["Schema Types"] = ", ".join(
-            schema_types
+        result["Schema Types"] = (
+            ", ".join(schema_types)
+            if schema_types
+            else "None detected"
         )
+
+        article_types = {
+            "Article",
+            "NewsArticle",
+            "BlogPosting",
+        }
+
+        if article_types.intersection(
+            set(schema_types)
+        ):
+            result["Article Schema"] = "Yes"
 
         if "FAQPage" in schema_types:
             result["FAQ Schema"] = "Yes"
 
-        if "Organization" in schema_types:
+        organization_types = {
+            "Organization",
+            "Corporation",
+            "LocalBusiness",
+        }
+
+        if organization_types.intersection(
+            set(schema_types)
+        ):
             result["Organization Schema"] = "Yes"
 
         if "Person" in schema_types:
             result["Person Schema"] = "Yes"
 
-        # Author / expertise signals
-        page_text = soup.get_text(
-            " ",
-            strip=True,
-        ).lower()
-
-        author_terms = [
-            "author",
-            "written by",
-            "reviewed by",
-            "expert",
-            "editor",
-        ]
-
-        if any(
-            term in page_text
-            for term in author_terms
-        ):
-            result["Author Signal"] = "Yes"
-
-        # Robots.txt and AI crawler checks
-        robots_url, robots_text = get_robots_txt(
-            response.url
+        result["Author Signal"] = (
+            find_author_signal(
+                soup,
+                schema_types,
+            )
         )
 
-        result["Robots.txt"] = (
-            robots_url if robots_text else "Not found"
+        entity_score, entity_text = (
+            detect_entity_signals(
+                soup,
+                schema_types,
+            )
         )
 
-        crawler_results = check_ai_crawlers(
-            robots_text
+        result["Entity Signals"] = entity_text
+
+        # -------------------------
+        # AI Crawler Accessibility
+        # -------------------------
+
+        robots_url, robots_text = (
+            get_robots_txt(response.url)
         )
-
-        for crawler, status in crawler_results.items():
-            result[crawler] = status
-
-        # Simple readiness score
-        score = 0
-
-        if response.status_code == 200:
-            score += 10
-
-        if result["Title"]:
-            score += 10
-
-        if result["Meta Description"]:
-            score += 10
-
-        if result["Canonical"]:
-            score += 10
-
-        if result["H1"]:
-            score += 10
-
-        if result["H2 Count"] > 0:
-            score += 10
-
-        if result["Question Headings"] > 0:
-            score += 10
-
-        if schema_types:
-            score += 10
-
-        if result["Author Signal"] == "Yes":
-            score += 10
 
         if robots_text:
-            score += 10
+            result["Robots.txt"] = robots_url
 
-        result["AI SEO Score"] = score
+        else:
+            result["Robots.txt"] = (
+                "Could not retrieve"
+            )
+
+        crawler_results = {}
+
+        for crawler in AI_CRAWLERS:
+            status = crawler_status(
+                robots_text,
+                crawler,
+            )
+
+            crawler_results[crawler] = status
+            result[crawler] = status
+
+        # -------------------------
+        # Component Assessments
+        # -------------------------
+
+        technical_score = 0
+        technical_max = 6
+
+        if response.status_code == 200:
+            technical_score += 1
+
+        if result["Title"]:
+            technical_score += 1
+
+        if result["Meta Description"]:
+            technical_score += 1
+
+        if result["Canonical"]:
+            technical_score += 1
+
+        if result["H1"]:
+            technical_score += 1
+
+        if result["Indexability"] == (
+            "No meta noindex detected"
+        ):
+            technical_score += 1
+
+        result["Technical Readiness"] = (
+            classify_score(
+                technical_score,
+                technical_max,
+            )
+        )
+
+        aeo_score = 0
+        aeo_max = 4
+
+        if result["H2 Count"] > 0:
+            aeo_score += 1
+
+        if result["Question Headings"] > 0:
+            aeo_score += 1
+
+        if schema_types:
+            aeo_score += 1
+
+        if (
+            result["Article Schema"] == "Yes"
+            or result["FAQ Schema"] == "Yes"
+        ):
+            aeo_score += 1
+
+        result["AEO Signals"] = classify_score(
+            aeo_score,
+            aeo_max,
+        )
+
+        result["Entity Readiness"] = (
+            classify_score(
+                entity_score,
+                4,
+            )
+        )
+
+        accessible_count = 0
+        verified_count = 0
+
+        for status in crawler_results.values():
+
+            if status != "Could not verify":
+                verified_count += 1
+
+            if (
+                "Accessible" in status
+                or "No blocking rule" in status
+                or "No specific directive" in status
+            ):
+                accessible_count += 1
+
+        if verified_count == 0:
+            result["AI Crawler Access"] = (
+                "Could not verify"
+            )
+
+        elif accessible_count == len(
+            AI_CRAWLERS
+        ):
+            result["AI Crawler Access"] = (
+                "No full blocks detected"
+            )
+
+        elif accessible_count > 0:
+            result["AI Crawler Access"] = (
+                "Mixed"
+            )
+
+        else:
+            result["AI Crawler Access"] = (
+                "Restricted"
+            )
+
+        # -------------------------
+        # Custom Readiness Score
+        # -------------------------
+        #
+        # This is a portfolio diagnostic score based
+        # only on observable website signals.
+        # It is NOT a ranking or citation probability.
+        #
+
+        total = 0
+
+        total += round(
+            (technical_score / technical_max) * 40
+        )
+
+        total += round(
+            (aeo_score / aeo_max) * 25
+        )
+
+        total += round(
+            (entity_score / 4) * 20
+        )
+
+        if verified_count:
+            total += round(
+                (
+                    accessible_count
+                    / len(AI_CRAWLERS)
+                )
+                * 15
+            )
+
+        result["Custom Readiness Score"] = min(
+            total,
+            100,
+        )
 
     except requests.RequestException as error:
 
         result["Status Code"] = "ERROR"
         result["Final URL"] = str(error)
+        result["Indexability"] = (
+            "Could not assess"
+        )
+        result["Technical Readiness"] = (
+            "Could not assess"
+        )
+        result["AEO Signals"] = (
+            "Could not assess"
+        )
+        result["Entity Readiness"] = (
+            "Could not assess"
+        )
+        result["AI Crawler Access"] = (
+            "Could not assess"
+        )
 
     return result
 
 
 def read_urls(filename):
-    """Read URLs from a CSV file."""
-
+    """Read URLs from a CSV containing a URL column."""
     urls = []
 
     with open(
@@ -367,8 +738,7 @@ def read_urls(filename):
 
 
 def save_results(results, filename):
-    """Save audit results to CSV."""
-
+    """Save audit results as CSV."""
     if not results:
         return
 
@@ -389,21 +759,32 @@ def save_results(results, filename):
 
 
 def main():
-
     input_file = "sample_urls.csv"
     output_file = "ai_seo_audit_output.csv"
 
     urls = read_urls(input_file)
 
+    if not urls:
+        print(
+            "No URLs found in sample_urls.csv"
+        )
+        return
+
     results = []
 
+    print(
+        f"Starting AI SEO audit for "
+        f"{len(urls)} URL(s)...\n"
+    )
+
     for url in urls:
+        print(
+            f"Auditing AI SEO readiness: {url}"
+        )
 
-        print(f"Auditing AI SEO readiness: {url}")
-
-        result = audit_url(url)
-
-        results.append(result)
+        results.append(
+            audit_url(url)
+        )
 
     save_results(
         results,
@@ -411,8 +792,19 @@ def main():
     )
 
     print(
-        "\nAI SEO audit complete. "
+        "\nAI SEO audit complete."
+    )
+
+    print(
         f"Results saved to {output_file}"
+    )
+
+    print(
+        "\nNote: Custom Readiness Score is a "
+        "diagnostic score based on observable "
+        "website signals. It does not predict "
+        "rankings, AI citations, or inclusion "
+        "in AI-generated answers."
     )
 
 
