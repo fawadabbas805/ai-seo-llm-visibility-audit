@@ -1,79 +1,194 @@
 # AI SEO & LLM Visibility Audit
 
-A practical audit toolkit for evaluating how well a website is structured for AI-powered search, answer engines, and generative search experiences.
+A practical Python-based audit toolkit for evaluating website signals related to **AI SEO, Answer Engine Optimization (AEO), Generative Engine Optimization (GEO), AI crawler accessibility, entity readiness, and technical search visibility**.
 
-The project focuses on **AI SEO, AEO (Answer Engine Optimization), GEO (Generative Engine Optimization), technical accessibility, structured content, entity signals, and AI-search readiness**.
+The toolkit combines traditional technical SEO checks with emerging AI-search considerations to help identify areas that may affect how easily search engines and AI-driven systems can access, understand, and interpret website content.
 
 ## 🔍 What This Toolkit Evaluates
 
-The toolkit is being developed to review signals such as:
+### Technical SEO Signals
 
-- AI crawler accessibility
-- Robots.txt directives
-- Meta robots directives
+- HTTP status codes
+- Final destination URLs
+- Indexability signals
 - Canonical URLs
-- Page titles and descriptions
-- Heading structure
-- Question-based content
-- FAQ-style content
-- Schema and structured data
-- Organization and entity signals
-- Author information
-- External source/reference signals
+- Meta robots directives
+- Page titles
+- Meta descriptions
+- H1 and H2 structure
+- Robots.txt availability
+
+### 🤖 AI Crawler Accessibility
+
+The audit reviews robots.txt directives associated with crawlers and user agents such as:
+
+- GPTBot
+- ChatGPT-User
+- OAI-SearchBot
+- ClaudeBot
+- PerplexityBot
+- Google-Extended
+
+This helps identify whether observable robots.txt directives appear to allow or restrict access for these user agents.
+
+### 💬 AEO — Answer Engine Optimization Signals
+
+The toolkit reviews page-level signals that may support answer-oriented content, including:
+
+- Question-based headings/content
+- FAQ-related structured data
 - Content structure
-- Internal linking signals
-- AI-search readiness indicators
+- Heading organization
+- Answer-focused page elements
 
-## 🤖 AI Crawler Analysis
+These checks are intended to highlight opportunities for making important information easier for search and answer systems to interpret.
 
-The toolkit is designed to help investigate whether website configurations may affect access for crawlers associated with AI and search platforms.
+### 🌐 GEO — Generative Engine Optimization Signals
 
-Crawler access should always be interpreted together with the website's robots.txt rules and current platform documentation.
+The audit also reviews observable signals relevant to generative-search readiness, including:
 
-## 🎯 AEO & GEO Analysis
-
-The project also evaluates page-level characteristics that may support:
-
-**AEO — Answer Engine Optimization**
-
-- Clear question-and-answer structures
-- Concise answer sections
-- Logical heading hierarchy
-- Structured data
-- Content organization
-
-**GEO — Generative Engine Optimization**
-
-- Entity clarity
-- Brand information
-- Supporting sources
 - Structured content
-- Topical relationships
-- Machine-readable information
+- Schema markup
+- Entity-related signals
+- Organization and Person schema
+- Author signals
+- Canonicalization
+- Crawl accessibility
+- Content structure
+- Technical accessibility
 
-## ⚠️ Important Note
+### 🧩 Entity & Structured Data Signals
 
-This toolkit evaluates technical and content signals that may affect search and AI-system accessibility or understanding.
+The toolkit checks for signals such as:
 
-It does **not** guarantee that a page or brand will appear, rank, or be cited in ChatGPT, Google AI experiences, Gemini, Perplexity, Copilot, or other AI systems.
+- Schema markup
+- FAQ schema
+- Organization schema
+- Person schema
+- Author signals
+- Entity-related page elements
 
-AI visibility depends on many factors outside the control of a website owner.
+These signals can help search systems better understand the entities and relationships represented on a website.
 
-## 🛠 Planned Components
+## 📊 Audit Output
 
-This repository will include:
+Results are exported to a CSV file for further analysis.
 
-- Python-based AI SEO audit script
-- Sample URL input
-- CSV audit output
-- AI crawler accessibility checks
-- AEO/GEO checklist
-- Structured data analysis
-- Entity-signal analysis
-- Documentation and example findings
+Example fields include:
+
+- URL
+- Status Code
+- Final URL
+- Indexability
+- Title
+- Meta Description
+- Canonical
+- H1
+- H2 Count
+- Question Signals
+- Schema Type
+- Article Schema
+- FAQ Schema
+- Organization Schema
+- Person Schema
+- Author Signals
+- Robots.txt
+- GPTBot Accessibility
+- ChatGPT-User Accessibility
+- OAI-SearchBot Accessibility
+- ClaudeBot Accessibility
+- PerplexityBot Accessibility
+- Google-Extended Accessibility
+- Technical Signals
+- AEO Signals
+- Entity Readiness
+- AI Crawler Status
+- Custom Readiness Score
+
+A sample audit output is included in:
+
+`sample_output.csv`
+
+## 📈 Custom Readiness Score
+
+The toolkit generates a **Custom Readiness Score** based on observable signals detected during the audit.
+
+The score is designed to help organize findings and identify areas that may require further investigation.
+
+**Important:** This is a diagnostic score created by this toolkit. It does not predict Google rankings, AI citations, traffic, or inclusion in AI-generated answers.
+
+Crawler accessibility also does not guarantee that content will be indexed, cited, retrieved, or surfaced by any AI system.
+
+## 🚀 How to Use
+
+### 1. Install Python
+
+Python 3 is required.
+
+### 2. Install dependencies
+
+```bash
+py -m pip install -r requirements.txt
+```
+
+### 3. Add URLs
+
+Add the URLs you want to audit to:
+
+```text
+sample_urls.csv
+```
+
+### 4. Run the audit
+
+```bash
+py ai_seo_audit.py
+```
+
+### 5. Review the results
+
+The audit generates:
+
+```text
+ai_seo_audit_output.csv
+```
+
+Open the CSV in Excel, Google Sheets, or another spreadsheet application for analysis.
+
+## 🛠 Technologies Used
+
+- Python
+- Requests
+- BeautifulSoup
+- CSV processing
+- HTML parsing
+- Robots.txt analysis
+- Schema/structured-data analysis
+
+## 🎯 Use Cases
+
+This toolkit can support:
+
+- AI SEO audits
+- Technical SEO audits
+- AEO audits
+- GEO audits
+- AI crawler accessibility reviews
+- Structured data reviews
+- Entity signal analysis
+- Content-structure analysis
+- Pre-audit website research
+
+It is intended to complement professional tools and manual analysis rather than replace platforms such as Screaming Frog SEO Spider, Google Search Console, Ahrefs, or Semrush.
+
+## ⚠️ Limitations
+
+AI search visibility cannot be determined from website signals alone.
+
+Results may also be affected by network restrictions, robots.txt availability, JavaScript rendering, anti-bot systems, authentication, geographic restrictions, and other technical factors.
+
+A failed request should therefore not automatically be interpreted as poor AI-search readiness.
 
 ## 👤 About
 
-Created by **Fawad Abbas**, Technical SEO & AI Search Specialist.
-
-Focus areas include Technical SEO, AI SEO, AEO, GEO, Google Search Console, crawling and indexing, structured data, WordPress SEO, Shopify SEO, and AI Search Optimization.
+Created as a practical Technical SEO and AI Search Optimization project covering **Technical SEO, AI SEO, AEO, GEO, structured data, entity analysis, and AI crawler accessibility**.
